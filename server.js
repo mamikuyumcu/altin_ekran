@@ -1,81 +1,72 @@
 const http = require('http');
 
-// Render.com'un botu kapatmaması için göstermelik bir web sayfası açıyoruz
+// Sanal bekçinin (cron-job) uyanık tutması için canlı sayfa açıyoruz
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.write("Altin botu an itibariyla 7/24 calisiyor!");
+  res.write("Kasimpasa Kuyumcusu Botu 7/24 Aktif!");
   res.end();
 }).listen(process.env.PORT || 3000);
 
-// Eski kodundaki Firebase adresin
-const firebaseUrl = "https://kasimpasakuyumcusu-aa3cc-default-rtdb.firebaseio.com/fiyatlar.json";
+const firebaseUrl = "https://kasimpasakuyumcusu-aa3cc-default-rtdb.firebaseio.com";
 const apiUrl = "https://prdprc.saglamoglu.app/api/v1/prices/currentmarketproductprices";
-
-// API'deki ID numaraları ile senin HTML'deki ürün isimlerini eşleştiriyoruz.
-// DİKKAT: Has altın 1 numaraydı. Diğerlerinin numaralarını bilmediğim için şimdilik rastgele 2,3,4 yazdım.
-// Kendi sistemine göre bu numaraları (marketProductId) kesinlikle düzeltmelisin!
-const idEslesmeleri = {
-  1: "hasaltin",
-  2: "gramaltin",
-  3: "eskiceyrek",
-  4: "yeniceyrek",
-  5: "eskiyarim",
-  6: "yeniyarim",
-  7: "eskitam",
-  8: "yenitam",
-  9: "eskiata",
-  10: "yeniata",
-  11: "22ayargram",
-  12: "22ayarbilezik"
-};
 
 async function fiyatlariGuncelle() {
   try {
-    // 1. API'den verileri çekiyoruz
+    // 1. Sağlamoğlu API'sinden taze HAS ALTIN fiyatını çekiyoruz
     const apiYaniti = await fetch(apiUrl);
     const jsonVeri = await apiYaniti.json();
-    const dataArray = jsonVeri.data;
+    
+    // API içinden Has Altın'ı (ID: 1) buluyoruz
+    const hasAltinVerisi = jsonVeri.data.find(urun => urun.marketProductId == 1);
+    const hasAlis = Number(hasAltinVerisi.customerBuysAt);
+    const hasSatis = Number(hasAltinVerisi.customerSellsAt);
 
-    let urunlerObjesi = {};
+    // 2. Firebase'den senin Excel'de güncellediğin çarpanları (katsayıları) alıyoruz
+    const ayarYaniti = await fetch(firebaseUrl + "/ayarlar.json");
+    const carpanlar = await ayarYaniti.json();
 
-    // 2. Gelen verilerin içinde dönüp eşleşenleri paketliyoruz
-    for (let i = 0; i < dataArray.length; i++) {
-      let urun = dataArray[i];
-      let htmlKodu = idEslesmeleri[urun.marketProductId];
-
-      if (htmlKodu) {
-        urunlerObjesi[htmlKodu] = {
-          alis: Number(urun.customerBuysAt),
-          satis: Number(urun.customerSellsAt)
-        };
-      }
+    if (!carpanlar) {
+      console.log("Excel'den gelecek çarpanlar bekleniyor...");
+      return; 
     }
 
-    // 3. Saat bilgisini Türkiye formatında alıyoruz
+    // 3. HESAPLAMA: Has Altın fiyatı ile senin çarpanlarını tek tek çarpıyoruz
+    let urunlerObjesi = {
+      hasaltin: { alis: hasAlis, satis: hasSatis } // Has altın çarpan olmadan direkt yansır
+    };
+
+    // Excel'deki sıraya göre tüm ürünlerin fiyatını hesapla
+    for (const [isim, carpan] of Object.entries(carpanlar)) {
+      urunlerObjesi[isim] = {
+        // Virgülden sonra borsa gibi uzamasın diye fiyatları 2 hane ile sınırlıyoruz (.toFixed)
+        alis: Number((hasAlis * carpan.alis).toFixed(2)),
+        satis: Number((hasSatis * carpan.satis).toFixed(2))
+      };
+    }
+
     let simdi = new Date();
     let saatString = simdi.toLocaleTimeString('tr-TR', { timeZone: 'Europe/Istanbul', hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
-    // 4. HTML'in beklediği nihai paketi hazırlıyoruz
     let nihaiPaket = {
       sonGuncelleme: saatString,
       urunler: urunlerObjesi
     };
 
-    // 5. Firebase'e fırlatıyoruz (Google Sheets'e gerek kalmadı)
-    await fetch(firebaseUrl, {
+    // 4. Hesaplanmış son fiyat listesini vitrin (HTML) ekranının okuması için Firebase'e gönderiyoruz
+    await fetch(firebaseUrl + "/fiyatlar.json", {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(nihaiPaket)
     });
 
-    console.log("Veri Firebase'e başarıyla gönderildi: " + saatString);
+    console.log("Fiyatlar başarıyla hesaplandı ve vitrine gönderildi: " + saatString);
 
   } catch (hata) {
-    console.log("Bir hata oluştu: ", hata);
+    console.log("Bot hesaplama yaparken bir hata yaşadı: ", hata);
   }
 }
 
-// Sistemi başlat ve 10 saniyede (10000 milisaniye) bir sonsuza kadar tekrarla
-console.log("Bot başlatıldı, 10 saniyede bir veri çekilecek...");
-fiyatlariGuncelle(); // İlk çalışmayı hemen yap
+// Motoru çalıştır ve her 10 saniyede bir bu hesabı otomatik tekrarla
+console.log("Hesaplayıcı Bot göreve başladı...");
+fiyatlariGuncelle(); 
 setInterval(fiyatlariGuncelle, 10000);
